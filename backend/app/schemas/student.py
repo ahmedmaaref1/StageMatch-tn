@@ -27,3 +27,11 @@ class StudentResponse(StudentBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+class ParsedCVResponse(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    university: Optional[str] = None
+    domain: Optional[str] = None
+    skills: list[str] = []
+    raw_text_snippet: Optional[str] = None

@@ -2,15 +2,17 @@
 routers/offers.py — Endpoints for browsing and searching job offers
 """
 
+from collections import Counter
 from typing import Optional
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 from app.database import get_db
 from app.models.offer import Offer
 from app.schemas.offer import OfferResponse
 from app.scraper.runner import run_all_scrapers
+from app.scheduler import get_scheduler_status, run_scheduled_scraping
 
 router = APIRouter(prefix="/offers", tags=["Offers"])
 
@@ -46,6 +48,112 @@ def get_offers(
     # Order newest first
     offers = query.order_by(Offer.id.desc()).offset(skip).limit(limit).all()
     return offers
+
+
+@router.get("/analytics")
+def get_market_analytics(db: Session = Depends(get_db)):
+    """
+    Returns aggregated Tunisian tech job market statistics:
+    - Total offers & unique companies
+    - Breakdown by track / domain
+    - Breakdown by city / region
+    - Top 10 most demanded skills
+    - Top hiring tech companies
+    """
+    total_offers = db.query(Offer).count()
+    if total_offers == 0:
+        return {
+            "total_offers": 0,
+            "total_companies": 0,
+            "by_domain": [],
+            "by_city": [],
+            "top_skills": [],
+            "top_companies": [],
+            "top_track": "N/A",
+            "top_skill": "N/A"
+        }
+
+    # 1. Total distinct tech companies
+    total_companies = db.query(func.count(func.distinct(Offer.company))).scalar()
+
+    # 2. Offers by tech track
+    domain_counts = (
+        db.query(Offer.domain, func.count(Offer.id))
+        .group_by(Offer.domain)
+        .order_by(func.count(Offer.id).desc())
+        .all()
+    )
+    by_domain = [{"name": d[0], "count": d[1]} for d in domain_counts]
+    top_track = by_domain[0]["name"] if by_domain else "N/A"
+
+    # 3. Offers by city
+    city_counts = (
+        db.query(Offer.city, func.count(Offer.id))
+        .group_by(Offer.city)
+        .order_by(func.count(Offer.id).desc())
+        .limit(6)
+        .all()
+    )
+    by_city = [{"name": c[0], "count": c[1]} for c in city_counts]
+
+    # 4. Top recruiting companies
+    company_counts = (
+        db.query(Offer.company, func.count(Offer.id))
+        .group_by(Offer.company)
+        .order_by(func.count(Offer.id).desc())
+        .limit(8)
+        .all()
+    )
+    top_companies = [{"name": c[0], "count": c[1]} for c in company_counts]
+
+    # 5. Top 10 most demanded skills across all offers
+    all_skills = []
+    offers = db.query(Offer.skills).all()
+    for o in offers:
+        if o.skills and isinstance(o.skills, list):
+            all_skills.extend(o.skills)
+
+    skill_counter = Counter(all_skills)
+    top_skills = [{"name": skill, "count": count} for skill, count in skill_counter.most_common(10)]
+    top_skill = top_skills[0]["name"] if top_skills else "N/A"
+
+    return {
+        "total_offers": total_offers,
+        "total_companies": total_companies,
+        "by_domain": by_domain,
+        "by_city": by_city,
+        "top_skills": top_skills,
+        "top_companies": top_companies,
+        "top_track": top_track,
+        "top_skill": top_skill
+    }
+
+@router.get("/scraping/status")
+def get_cron_scraping_status():
+    """
+    Renvoie l'état du planificateur de scraping automatique (24h) :
+    - is_active : True / False
+    - last_run : date et heure de la dernière synchronisation
+    - next_run : heure de la prochaine exécution planifiée (à 02h00)
+    - last_inserted_count : nombre de nouveaux PFE ajoutés
+    - last_status : 'Succès', 'En cours d'exécution...', etc.
+    """
+    return get_scheduler_status()
+
+
+@router.post("/scraping/trigger")
+def trigger_background_scraping(background_tasks: BackgroundTasks):
+    """
+    Permet de forcer un scraping immédiat sans attendre 02h00 du matin.
+    Utilise BackgroundTasks pour exécuter la tâche en arrière-plan
+    sans faire ramer ni bloquer l'utilisateur.
+    """
+    background_tasks.add_task(run_scheduled_scraping)
+    return {
+        "status": "triggered",
+        "message": "Scraping d'arrière-plan démarré avec succès.",
+        "scheduler": get_scheduler_status(),
+    }
 
 
 @router.get("/{offer_id}", response_model=OfferResponse)

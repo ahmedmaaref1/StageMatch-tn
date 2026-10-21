@@ -1,0 +1,65 @@
+services:
+  # ── PostgreSQL Database ──────────────────────────────────────────────────────
+  db:
+    image: postgres:16-alpine
+    container_name: stagematch-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: stagematch
+      POSTGRES_PASSWORD: stagematch123
+      POSTGRES_DB: stagematch_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stagematch -d stagematch_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - stagematch-network
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: stagematch-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://stagematch:stagematch123@db:5432/stagematch_db
+      PROJECT_NAME: "StageMatch TN"
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - /app/__pycache__
+    networks:
+      - stagematch-network
+
+  # ── React + Nginx Frontend ───────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: stagematch-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - stagematch-network
+
+# ── Persistent Storage & Network ─────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  stagematch-network:
+    driver: bridge

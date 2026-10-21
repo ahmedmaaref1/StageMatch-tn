@@ -1,45 +1,41 @@
-"""
-main.py — FastAPI Application Entry Point
-
-FEATURES:
-- Automatic OpenAPI documentation at /docs
-- CORS Middleware enabled so React (localhost:5173) can communicate with API
-- Modular Routers for /offers and /students
-"""
-
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import offers, students
+from app.routers import offers, students, recommendations
+from app.scheduler import start_scheduler, shutdown_scheduler
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Démarrage : lance le planificateur de scraping en arrière-plan
+    start_scheduler()
+    yield
+    # Arrêt : éteint proprement le planificateur
+    shutdown_scheduler()
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="Smart PFE Internship Recommender for Tunisian Students",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
-# ── CORS CONFIGURATION ────────────────────────────────────────────────────────
-# WHY: Browsers block web requests made between different ports
-# (e.g. React on 5173 calling FastAPI on 8000). CORS allows this communication!
-origins = [
-    "http://localhost:5173",  # React Vite dev server
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-    "*",                      # Open during development
-]
-
+# Configuration CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ── INCLUDE ROUTERS ───────────────────────────────────────────────────────────
+# Enregistrement des routes
 app.include_router(offers.router)
 app.include_router(students.router)
+app.include_router(recommendations.router)
 
 
 @app.get("/")
@@ -47,5 +43,5 @@ def root():
     return {
         "app": "StageMatch TN",
         "status": "online",
-        "docs_url": "/docs"
+        "docs_url": "/docs",
     }
